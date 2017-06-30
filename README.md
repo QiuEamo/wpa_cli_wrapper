@@ -1,13 +1,24 @@
 # wpa_cli_wrapper
-wpa_cli 封装，可以在代码里直接调用wpa_cli命令的相关操作相关的操作
+wpa_cli_wrapper 是对 wpa_cli.c 代码进行封装，即把 wpa_cli 命令的相关操作集成到c代码里，并返回操作的结果。
 
-使用方法：进入wpa_cli_wrapper/wpa_supplicant-2.6/wpa_supplicant目录
+# 编译方法
+进入 wpa_cli_wrapper/wpa_supplicant-2.6/wpa_supplicant 目录，执行 make -f Makefile.wrapper, 在当前目录下生成 libwpa_cli_wrapper.a 和 libwpa_cli_wrapper_test；如果遇到提示类似“致命错误：netlink/genl/genl.h：没有那个文件或目录 ”的错误，请安装libnl库重试。
 
-执行：make -f Makefile.wrapper, 在当前目录下生成 libwpa_cli_wrapper.a 和 libwpa_cli_wrapper_test
+# 如何使用
+libwpa_cli_wrapper.a 静态库封装了wpa_cli的相关操作，接口参考libwpa_cli_wrapper.h头文件，使用请参考libwpa_cli_wrapper_test.c 
 
-libwpa_cli_wrapper_test 支持 wpa_cli 的 部分命令，
-
-        status, ifname, scan, scan_results,
-        select_network, add_network, list_network, set_network, remove_network,
-        enable_network, disable_network, save_config,
+# 支持的部分命令
+libwpa_cli_wrapper.a 支持 wpa_cli 的部分命令：
+1. status
+1. ifname
+1. scan
+1. scan_results
+1. select_network
+1. add_network
+1. list_network
+1. set_network 
+1. remove_network
+1. enable_network
+1. disable_network
+1. save_config
 
