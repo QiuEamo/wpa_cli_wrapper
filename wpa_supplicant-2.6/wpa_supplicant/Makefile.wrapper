@@ -2,17 +2,21 @@
 
 cc=gcc
 
-all:libwpa_cli_wrapper.a libwpa_cli_wrapper_test
+LIB=libwpa_cli_wrapper.a
 
-libwpa_cli_wrapper.a:
+BIN= libwpa_cli_wrapper_test
+
+all:${LIB} ${BIN} 
+
+${LIB}:libwpa_cli_wrapper.c
 	rm libwpa_cli_wrapper.o -f 
 	rm libwpa_cli_wrapper.a -f 
-	make -f Makefile libwpa_cli_wrapper.a
+	make -f Makefile ${LIB}
 	
-libwpa_cli_wrapper_test:libwpa_cli_wrapper_test.c
-	${cc} libwpa_cli_wrapper_test.c -o libwpa_cli_wrapper_test -lwpa_cli_wrapper -L.
+${BIN}:libwpa_cli_wrapper_test.c
+	${cc} libwpa_cli_wrapper_test.c -o ${BIN} -lwpa_cli_wrapper -L.
 
 clean:
 	rm libwpa_cli_wrapper.o -f
-	rm libwpa_cli_wrapper.a -f
-	rm libwpa_cli_wrapper_test -f 
+	rm ${LIB} -f
+	rm ${BIN} -f 

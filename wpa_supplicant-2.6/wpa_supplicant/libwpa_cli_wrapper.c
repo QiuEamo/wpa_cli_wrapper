@@ -69,6 +69,7 @@ static char ** wpa_list_cmd_list(void);
 static void update_networks(struct wpa_ctrl *ctrl);
 
 
+
 static void usage(void)
 {
 	printf("wpa_cli [-p<path to ctrl sockets>] [-i<ifname>] [-hvB] "
@@ -293,7 +294,6 @@ static int wpa_cli_cmd_status(struct wpa_ctrl *ctrl, int argc, char *argv[])
 #endif /* ANDROID */
 	return wpa_ctrl_command(ctrl, "STATUS");
 }
-
 
 static int wpa_cli_cmd_ping(struct wpa_ctrl *ctrl, int argc, char *argv[])
 {
@@ -2740,593 +2740,785 @@ enum wpa_cli_cmd_flags {
 struct wpa_cli_cmd {
 	const char *cmd;
 	int(*handler)(struct wpa_ctrl *ctrl, int argc, char *argv[]);
+	int(*handler_with_results)(struct wpa_ctrl *ctrl, int argc, char *argv[], char* buf, int buf_len);
 	char ** (*completion)(const char *str, int pos);
 	enum wpa_cli_cmd_flags flags;
 	const char *usage;
 };
 
+static int handler_with_results_default_func(struct wpa_ctrl *ctrl, int argc, char *argv[], char* buf, int buf_len)
+{
+	printf("handler_with_results_default_func not implemented!\n");
+	return WPA_CLI_EXEC_RES_UNIMPLEMENTED;
+}
+
+//////////////////////////////////////////////////////////////////////////////////// 
+
+static int _wpa_ctrl_command_with_results(struct wpa_ctrl *ctrl, char *cmd, int print, char* buf, int buf_len)
+{
+	size_t len;
+	int ret;
+
+	if (ctrl_conn == NULL) {
+		printf("Not connected to wpa_supplicant - command dropped.\n");
+		return -1;
+	}
+	if (ifname_prefix) {
+		os_snprintf(buf, buf_len, "IFNAME=%s %s",
+			ifname_prefix, cmd);
+		buf[buf_len - 1] = '\0';
+		cmd = buf;
+	}
+	len = buf_len - 1;
+	ret = wpa_ctrl_request(ctrl, cmd, os_strlen(cmd), buf, &len,
+		wpa_cli_msg_cb);
+	if (ret == -2) {
+		printf("'%s' command timed out.\n", cmd);
+		return -2;
+	}
+	else if (ret < 0) {
+		printf("'%s' command failed.\n", cmd);
+		return -1;
+	}
+	buf[len] = '\0';
+	
+	if (print) {
+		printf("%s", buf);
+		if (interactive && len > 0 && buf[len - 1] != '\n')
+			printf("\n");
+	}
+	return 0;
+}
+static int wpa_ctrl_command_with_results(struct wpa_ctrl *ctrl, char *cmd, char* buf, int buf_len)
+{
+	return _wpa_ctrl_command_with_results(ctrl, cmd, 0, buf, buf_len);
+}
+
+static int wpa_cli_cmd_with_results(struct wpa_ctrl *ctrl, const char *cmd, int min_args,
+	int argc, char *argv[], char* buf, int buf_len)
+{
+	char tm_cmd[4096];
+	if (argc < min_args) {
+		printf("Invalid %s command - at least %d argument%s "
+			"required.\n", cmd, min_args,
+			min_args > 1 ? "s are" : " is");
+		return -1;
+	}
+	if (write_cmd(tm_cmd, sizeof(tm_cmd), cmd, argc, argv) < 0)
+		return -1;
+	
+	return wpa_ctrl_command_with_results(ctrl, tm_cmd, buf, buf_len);
+}
+
+/**
+ * status 命令
+ */
+static int wpa_cli_cmd_status_with_results(struct wpa_ctrl *ctrl, int argc, char *argv[], char* buf, int buf_len)
+{
+	if (argc > 0 && os_strcmp(argv[0], "verbose") == 0)
+		return wpa_ctrl_command(ctrl, "STATUS-VERBOSE");
+	if (argc > 0 && os_strcmp(argv[0], "wps") == 0)
+		return wpa_ctrl_command(ctrl, "STATUS-WPS");
+	if (argc > 0 && os_strcmp(argv[0], "driver") == 0)
+		return wpa_ctrl_command(ctrl, "STATUS-DRIVER");
+#ifdef ANDROID
+	if (argc > 0 && os_strcmp(argv[0], "no_events") == 0)
+		return wpa_ctrl_command(ctrl, "STATUS-NO_EVENTS");
+#endif /* ANDROID */
+	return wpa_ctrl_command_with_results(ctrl, "STATUS", buf, buf_len);
+}
+
+/**
+ * ifname 命令
+ */
+static int wpa_cli_cmd_ifname_with_results(struct wpa_ctrl *ctrl, int argc, char *argv[], char* buf, int buf_len)
+{
+	return wpa_ctrl_command_with_results(ctrl, "IFNAME", buf, buf_len);
+}
+
+/**
+ * scan 命令
+ */
+static int wpa_cli_cmd_scan_with_results(struct wpa_ctrl *ctrl, int argc, char *argv[], char* buf, int buf_len)
+{
+	return wpa_cli_cmd_with_results(ctrl, "SCAN", 0, argc, argv, buf, buf_len);
+}
+
+/**
+ * scan_results 命令
+ */
+static int wpa_cli_cmd_scan_results_with_results(struct wpa_ctrl *ctrl, int argc, char *argv[], char* buf, int buf_len)
+{
+	return wpa_ctrl_command_with_results(ctrl, "SCAN_RESULTS", buf, buf_len);
+}
+
+/**
+ * select_network 命令
+ */
+static int wpa_cli_cmd_select_network_with_results(struct wpa_ctrl *ctrl, int argc, char *argv[], char* buf, int buf_len)
+{
+	return wpa_cli_cmd_with_results(ctrl, "SELECT_NETWORK", 1, argc, argv, buf, buf_len);
+}
+
+/**
+ * add_network 命令
+ */
+static int wpa_cli_cmd_add_network_with_results(struct wpa_ctrl *ctrl, int argc, char *argv[], char* buf, int buf_len)
+{
+	int res = wpa_ctrl_command_with_results(ctrl, "ADD_NETWORK", buf, buf_len);
+//	if (interactive) // TODO: 待测试
+		update_networks(ctrl);
+	return res;
+}
+
+/**
+ * list_network 命令
+ */
+static int wpa_cli_cmd_list_networks_with_results(struct wpa_ctrl *ctrl, int argc,char *argv[], char* buf, int buf_len)
+{
+	return wpa_ctrl_command_with_results(ctrl, "LIST_NETWORKS", buf, buf_len);
+}
+
+/**
+ * set_network 命令
+ */
+static int wpa_cli_cmd_set_network_with_results(struct wpa_ctrl *ctrl, int argc,char *argv[], char* buf, int buf_len)
+{
+	if (argc == 0) {
+		wpa_cli_show_network_variables();
+		return 0;
+	}
+
+	if (argc < 3) {
+		printf("Invalid SET_NETWORK command: needs three arguments\n"
+			"(network id, variable name, and value)\n");
+		return -1;
+	}
+
+	return wpa_cli_cmd_with_results(ctrl, "SET_NETWORK", 3, argc, argv, buf, buf_len);
+}
+
+/**
+ * remove_network 命令
+ */
+static int wpa_cli_cmd_remove_network_with_results(struct wpa_ctrl *ctrl, int argc,char *argv[], char* buf, int buf_len)
+{
+	int res = wpa_cli_cmd_with_results(ctrl, "REMOVE_NETWORK", 1, argc, argv, buf, buf_len);
+//	if (interactive) // TODO: 待测试
+		update_networks(ctrl);
+	return res;
+}
+
+/**
+ * enable_network 命令
+ */
+static int wpa_cli_cmd_enable_network_with_results(struct wpa_ctrl *ctrl, int argc,char *argv[], char* buf, int buf_len)
+{
+	return wpa_cli_cmd_with_results(ctrl, "ENABLE_NETWORK", 1, argc, argv, buf, buf_len);
+}
+
+/**
+ * disable_network 命令
+ */
+static int wpa_cli_cmd_disable_network_with_results(struct wpa_ctrl *ctrl, int argc,char *argv[], char* buf, int buf_len)
+{
+	return wpa_cli_cmd_with_results(ctrl, "DISABLE_NETWORK", 1, argc, argv, buf, buf_len);
+}
+
+/**
+ * save_config 命令
+ */
+static int wpa_cli_cmd_save_config_with_results(struct wpa_ctrl *ctrl, int argc,char *argv[], char* buf, int buf_len)
+{
+	return wpa_ctrl_command_with_results(ctrl, "SAVE_CONFIG", buf, buf_len);
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////
+
+
 static const struct wpa_cli_cmd wpa_cli_commands[] = {
-	{ "status", wpa_cli_cmd_status, NULL,
+	{ "status", wpa_cli_cmd_status, wpa_cli_cmd_status_with_results, NULL,
 	cli_cmd_flag_none,
 	"[verbose] = get current WPA/EAPOL/EAP status" },
-	{ "ifname", wpa_cli_cmd_ifname, NULL,
+	{ "ifname", wpa_cli_cmd_ifname, wpa_cli_cmd_ifname_with_results, NULL,
 	cli_cmd_flag_none,
 	"= get current interface name" },
-	{ "ping", wpa_cli_cmd_ping, NULL,
+	{ "ping", wpa_cli_cmd_ping, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= pings wpa_supplicant" },
-	{ "relog", wpa_cli_cmd_relog, NULL,
+	{ "relog", wpa_cli_cmd_relog, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= re-open log-file (allow rolling logs)" },
-	{ "note", wpa_cli_cmd_note, NULL,
+	{ "note", wpa_cli_cmd_note, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<text> = add a note to wpa_supplicant debug log" },
-	{ "mib", wpa_cli_cmd_mib, NULL,
+	{ "mib", wpa_cli_cmd_mib, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= get MIB variables (dot1x, dot11)" },
-	{ "help", wpa_cli_cmd_help, wpa_cli_complete_help,
+	{ "help", wpa_cli_cmd_help, handler_with_results_default_func, wpa_cli_complete_help,
 	cli_cmd_flag_none,
 	"[command] = show usage help" },
-	{ "interface", wpa_cli_cmd_interface, NULL,
+	{ "interface", wpa_cli_cmd_interface, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"[ifname] = show interfaces/select interface" },
-	{ "level", wpa_cli_cmd_level, NULL,
+	{ "level", wpa_cli_cmd_level, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<debug level> = change debug level" },
-	{ "license", wpa_cli_cmd_license, NULL,
+	{ "license", wpa_cli_cmd_license, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= show full wpa_cli license" },
-	{ "quit", wpa_cli_cmd_quit, NULL,
+	{ "quit", wpa_cli_cmd_quit, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= exit wpa_cli" },
-	{ "set", wpa_cli_cmd_set, wpa_cli_complete_set,
+	{ "set", wpa_cli_cmd_set, handler_with_results_default_func, wpa_cli_complete_set,
 	cli_cmd_flag_none,
 	"= set variables (shows list of variables when run without "
 	"arguments)" },
-	{ "dump", wpa_cli_cmd_dump, NULL,
+	{ "dump", wpa_cli_cmd_dump, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= dump config variables" },
-	{ "get", wpa_cli_cmd_get, wpa_cli_complete_get,
+	{ "get", wpa_cli_cmd_get, handler_with_results_default_func, wpa_cli_complete_get,
 	cli_cmd_flag_none,
 	"<name> = get information" },
-	{ "driver_flags", wpa_cli_cmd_driver_flags, NULL,
+	{ "driver_flags", wpa_cli_cmd_driver_flags, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= list driver flags" },
-	{ "logon", wpa_cli_cmd_logon, NULL,
+	{ "logon", wpa_cli_cmd_logon, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= IEEE 802.1X EAPOL state machine logon" },
-	{ "logoff", wpa_cli_cmd_logoff, NULL,
+	{ "logoff", wpa_cli_cmd_logoff, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= IEEE 802.1X EAPOL state machine logoff" },
-	{ "pmksa", wpa_cli_cmd_pmksa, NULL,
+	{ "pmksa", wpa_cli_cmd_pmksa, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= show PMKSA cache" },
-	{ "pmksa_flush", wpa_cli_cmd_pmksa_flush, NULL,
+	{ "pmksa_flush", wpa_cli_cmd_pmksa_flush,handler_with_results_default_func,  NULL,
 	cli_cmd_flag_none,
 	"= flush PMKSA cache entries" },
-	{ "reassociate", wpa_cli_cmd_reassociate, NULL,
+	{ "reassociate", wpa_cli_cmd_reassociate, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= force reassociation" },
-	{ "reattach", wpa_cli_cmd_reattach, NULL,
+	{ "reattach", wpa_cli_cmd_reattach, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= force reassociation back to the same BSS" },
-	{ "preauthenticate", wpa_cli_cmd_preauthenticate, wpa_cli_complete_bss,
+	{ "preauthenticate", wpa_cli_cmd_preauthenticate, handler_with_results_default_func, wpa_cli_complete_bss,
 	cli_cmd_flag_none,
 	"<BSSID> = force preauthentication" },
-	{ "identity", wpa_cli_cmd_identity, NULL,
+	{ "identity", wpa_cli_cmd_identity, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<network id> <identity> = configure identity for an SSID" },
-	{ "password", wpa_cli_cmd_password, NULL,
+	{ "password", wpa_cli_cmd_password, handler_with_results_default_func, NULL,
 	cli_cmd_flag_sensitive,
 	"<network id> <password> = configure password for an SSID" },
-	{ "new_password", wpa_cli_cmd_new_password, NULL,
+	{ "new_password", wpa_cli_cmd_new_password, handler_with_results_default_func, NULL,
 	cli_cmd_flag_sensitive,
 	"<network id> <password> = change password for an SSID" },
-	{ "pin", wpa_cli_cmd_pin, NULL,
+	{ "pin", wpa_cli_cmd_pin, handler_with_results_default_func, NULL,
 	cli_cmd_flag_sensitive,
 	"<network id> <pin> = configure pin for an SSID" },
-	{ "otp", wpa_cli_cmd_otp, NULL,
+	{ "otp", wpa_cli_cmd_otp, handler_with_results_default_func, NULL,
 	cli_cmd_flag_sensitive,
 	"<network id> <password> = configure one-time-password for an SSID"
 	},
-	{ "passphrase", wpa_cli_cmd_passphrase, NULL,
+	{ "passphrase", wpa_cli_cmd_passphrase, handler_with_results_default_func, NULL,
 	cli_cmd_flag_sensitive,
 	"<network id> <passphrase> = configure private key passphrase\n"
 	"  for an SSID" },
-	{ "sim", wpa_cli_cmd_sim, NULL,
+	{ "sim", wpa_cli_cmd_sim, handler_with_results_default_func, NULL,
 	cli_cmd_flag_sensitive,
 	"<network id> <pin> = report SIM operation result" },
-	{ "bssid", wpa_cli_cmd_bssid, NULL,
+	{ "bssid", wpa_cli_cmd_bssid, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<network id> <BSSID> = set preferred BSSID for an SSID" },
-	{ "blacklist", wpa_cli_cmd_blacklist, wpa_cli_complete_bss,
+	{ "blacklist", wpa_cli_cmd_blacklist, handler_with_results_default_func, wpa_cli_complete_bss,
 	cli_cmd_flag_none,
 	"<BSSID> = add a BSSID to the blacklist\n"
 	"blacklist clear = clear the blacklist\n"
 	"blacklist = display the blacklist" },
-	{ "log_level", wpa_cli_cmd_log_level, NULL,
+	{ "log_level", wpa_cli_cmd_log_level, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<level> [<timestamp>] = update the log level/timestamp\n"
 	"log_level = display the current log level and log options" },
-	{ "list_networks", wpa_cli_cmd_list_networks, NULL,
+	{ "list_networks", wpa_cli_cmd_list_networks, wpa_cli_cmd_list_networks_with_results, NULL,
 	cli_cmd_flag_none,
 	"= list configured networks" },
-	{ "select_network", wpa_cli_cmd_select_network,
+	{ "select_network", wpa_cli_cmd_select_network,wpa_cli_cmd_select_network_with_results, 
 	wpa_cli_complete_network_id,
 	cli_cmd_flag_none,
 	"<network id> = select a network (disable others)" },
-	{ "enable_network", wpa_cli_cmd_enable_network,
+	{ "enable_network", wpa_cli_cmd_enable_network, wpa_cli_cmd_enable_network_with_results, 
 	wpa_cli_complete_network_id,
 	cli_cmd_flag_none,
 	"<network id> = enable a network" },
-	{ "disable_network", wpa_cli_cmd_disable_network,
+	{ "disable_network", wpa_cli_cmd_disable_network, wpa_cli_cmd_disable_network_with_results, 
 	wpa_cli_complete_network_id,
 	cli_cmd_flag_none,
 	"<network id> = disable a network" },
-	{ "add_network", wpa_cli_cmd_add_network, NULL,
+	{ "add_network", wpa_cli_cmd_add_network, wpa_cli_cmd_add_network_with_results, NULL,
 	cli_cmd_flag_none,
 	"= add a network" },
-	{ "remove_network", wpa_cli_cmd_remove_network,
+	{ "remove_network", wpa_cli_cmd_remove_network, wpa_cli_cmd_remove_network_with_results, 
 	wpa_cli_complete_network_id,
 	cli_cmd_flag_none,
 	"<network id> = remove a network" },
-	{ "set_network", wpa_cli_cmd_set_network, wpa_cli_complete_network,
+	{ "set_network", wpa_cli_cmd_set_network, wpa_cli_cmd_set_network_with_results,  wpa_cli_complete_network,
 	cli_cmd_flag_sensitive,
 	"<network id> <variable> <value> = set network variables (shows\n"
 	"  list of variables when run without arguments)" },
-	{ "get_network", wpa_cli_cmd_get_network, wpa_cli_complete_network,
+	{ "get_network", wpa_cli_cmd_get_network, handler_with_results_default_func, wpa_cli_complete_network,
 	cli_cmd_flag_none,
 	"<network id> <variable> = get network variables" },
-	{ "dup_network", wpa_cli_cmd_dup_network, wpa_cli_complete_dup_network,
+	{ "dup_network", wpa_cli_cmd_dup_network, handler_with_results_default_func, wpa_cli_complete_dup_network,
 	cli_cmd_flag_none,
 	"<src network id> <dst network id> <variable> = duplicate network variables"
 	},
-	{ "list_creds", wpa_cli_cmd_list_creds, NULL,
+	{ "list_creds", wpa_cli_cmd_list_creds, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= list configured credentials" },
-	{ "add_cred", wpa_cli_cmd_add_cred, NULL,
+	{ "add_cred", wpa_cli_cmd_add_cred, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= add a credential" },
-	{ "remove_cred", wpa_cli_cmd_remove_cred, NULL,
+	{ "remove_cred", wpa_cli_cmd_remove_cred, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<cred id> = remove a credential" },
-	{ "set_cred", wpa_cli_cmd_set_cred, NULL,
+	{ "set_cred", wpa_cli_cmd_set_cred, handler_with_results_default_func, NULL,
 	cli_cmd_flag_sensitive,
 	"<cred id> <variable> <value> = set credential variables" },
-	{ "get_cred", wpa_cli_cmd_get_cred, NULL,
+	{ "get_cred", wpa_cli_cmd_get_cred, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<cred id> <variable> = get credential variables" },
-	{ "save_config", wpa_cli_cmd_save_config, NULL,
+	{ "save_config", wpa_cli_cmd_save_config, wpa_cli_cmd_save_config_with_results, NULL,
 	cli_cmd_flag_none,
 	"= save the current configuration" },
-	{ "disconnect", wpa_cli_cmd_disconnect, NULL,
+	{ "disconnect", wpa_cli_cmd_disconnect, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= disconnect and wait for reassociate/reconnect command before\n"
 	"  connecting" },
-	{ "reconnect", wpa_cli_cmd_reconnect, NULL,
+	{ "reconnect", wpa_cli_cmd_reconnect, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= like reassociate, but only takes effect if already disconnected"
 	},
-	{ "scan", wpa_cli_cmd_scan, NULL,
+	{ "scan", wpa_cli_cmd_scan, wpa_cli_cmd_scan_with_results, NULL,
 	cli_cmd_flag_none,
 	"= request new BSS scan" },
-	{ "scan_results", wpa_cli_cmd_scan_results, NULL,
+	{ "scan_results", wpa_cli_cmd_scan_results, wpa_cli_cmd_scan_results_with_results, NULL,
 	cli_cmd_flag_none,
 	"= get latest scan results" },
-	{ "abort_scan", wpa_cli_cmd_abort_scan, NULL,
+	{ "abort_scan", wpa_cli_cmd_abort_scan, handler_with_results_default_func,  NULL,
 	cli_cmd_flag_none,
 	"= request ongoing scan to be aborted" },
-	{ "bss", wpa_cli_cmd_bss, wpa_cli_complete_bss,
+	{ "bss", wpa_cli_cmd_bss, handler_with_results_default_func, wpa_cli_complete_bss,
 	cli_cmd_flag_none,
 	"<<idx> | <bssid>> = get detailed scan result info" },
-	{ "get_capability", wpa_cli_cmd_get_capability,
+	{ "get_capability", wpa_cli_cmd_get_capability,handler_with_results_default_func, 
 	wpa_cli_complete_get_capability, cli_cmd_flag_none,
 	"<eap/pairwise/group/key_mgmt/proto/auth_alg/channels/freq/modes> "
 	"= get capabilities" },
-	{ "reconfigure", wpa_cli_cmd_reconfigure, NULL,
+	{ "reconfigure", wpa_cli_cmd_reconfigure, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= force wpa_supplicant to re-read its configuration file" },
-	{ "terminate", wpa_cli_cmd_terminate, NULL,
+	{ "terminate", wpa_cli_cmd_terminate, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= terminate wpa_supplicant" },
-	{ "interface_add", wpa_cli_cmd_interface_add, NULL,
+	{ "interface_add", wpa_cli_cmd_interface_add, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<ifname> <confname> <driver> <ctrl_interface> <driver_param>\n"
 	"  <bridge_name> <create> <type> = adds new interface, all "
 	"parameters but\n"
 	"  <ifname> are optional. Supported types are station ('sta') and "
 	"AP ('ap')" },
-	{ "interface_remove", wpa_cli_cmd_interface_remove, NULL,
+	{ "interface_remove", wpa_cli_cmd_interface_remove, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<ifname> = removes the interface" },
-	{ "interface_list", wpa_cli_cmd_interface_list, NULL,
+	{ "interface_list", wpa_cli_cmd_interface_list, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= list available interfaces" },
-	{ "ap_scan", wpa_cli_cmd_ap_scan, NULL,
+	{ "ap_scan", wpa_cli_cmd_ap_scan, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<value> = set ap_scan parameter" },
-	{ "scan_interval", wpa_cli_cmd_scan_interval, NULL,
+	{ "scan_interval", wpa_cli_cmd_scan_interval, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<value> = set scan_interval parameter (in seconds)" },
-	{ "bss_expire_age", wpa_cli_cmd_bss_expire_age, NULL,
+	{ "bss_expire_age", wpa_cli_cmd_bss_expire_age, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<value> = set BSS expiration age parameter" },
-	{ "bss_expire_count", wpa_cli_cmd_bss_expire_count, NULL,
+	{ "bss_expire_count", wpa_cli_cmd_bss_expire_count, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<value> = set BSS expiration scan count parameter" },
-	{ "bss_flush", wpa_cli_cmd_bss_flush, NULL,
+	{ "bss_flush", wpa_cli_cmd_bss_flush, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<value> = set BSS flush age (0 by default)" },
-	{ "stkstart", wpa_cli_cmd_stkstart, NULL,
+	{ "stkstart", wpa_cli_cmd_stkstart, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<addr> = request STK negotiation with <addr>" },
-	{ "ft_ds", wpa_cli_cmd_ft_ds, wpa_cli_complete_bss,
+	{ "ft_ds", wpa_cli_cmd_ft_ds, handler_with_results_default_func, wpa_cli_complete_bss,
 	cli_cmd_flag_none,
 	"<addr> = request over-the-DS FT with <addr>" },
-	{ "wps_pbc", wpa_cli_cmd_wps_pbc, wpa_cli_complete_bss,
+	{ "wps_pbc", wpa_cli_cmd_wps_pbc, handler_with_results_default_func, wpa_cli_complete_bss,
 	cli_cmd_flag_none,
 	"[BSSID] = start Wi-Fi Protected Setup: Push Button Configuration" },
-	{ "wps_pin", wpa_cli_cmd_wps_pin, wpa_cli_complete_bss,
+	{ "wps_pin", wpa_cli_cmd_wps_pin, handler_with_results_default_func, wpa_cli_complete_bss,
 	cli_cmd_flag_sensitive,
 	"<BSSID> [PIN] = start WPS PIN method (returns PIN, if not "
 	"hardcoded)" },
-	{ "wps_check_pin", wpa_cli_cmd_wps_check_pin, NULL,
+	{ "wps_check_pin", wpa_cli_cmd_wps_check_pin, handler_with_results_default_func, NULL,
 	cli_cmd_flag_sensitive,
 	"<PIN> = verify PIN checksum" },
-	{ "wps_cancel", wpa_cli_cmd_wps_cancel, NULL, cli_cmd_flag_none,
+	{ "wps_cancel", wpa_cli_cmd_wps_cancel, handler_with_results_default_func, NULL, cli_cmd_flag_none,
 	"Cancels the pending WPS operation" },
 #ifdef CONFIG_WPS_NFC
-	{ "wps_nfc", wpa_cli_cmd_wps_nfc, wpa_cli_complete_bss,
+	{ "wps_nfc", wpa_cli_cmd_wps_nfc, handler_with_results_default_func, wpa_cli_complete_bss,
 	cli_cmd_flag_none,
 	"[BSSID] = start Wi-Fi Protected Setup: NFC" },
-	{ "wps_nfc_config_token", wpa_cli_cmd_wps_nfc_config_token, NULL,
+	{ "wps_nfc_config_token", wpa_cli_cmd_wps_nfc_config_token, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<WPS|NDEF> = build configuration token" },
-	{ "wps_nfc_token", wpa_cli_cmd_wps_nfc_token, NULL,
+	{ "wps_nfc_token", wpa_cli_cmd_wps_nfc_token, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<WPS|NDEF> = create password token" },
-	{ "wps_nfc_tag_read", wpa_cli_cmd_wps_nfc_tag_read, NULL,
+	{ "wps_nfc_tag_read", wpa_cli_cmd_wps_nfc_tag_read, handler_with_results_default_func, NULL,
 	cli_cmd_flag_sensitive,
 	"<hexdump of payload> = report read NFC tag with WPS data" },
-	{ "nfc_get_handover_req", wpa_cli_cmd_nfc_get_handover_req, NULL,
+	{ "nfc_get_handover_req", wpa_cli_cmd_nfc_get_handover_req, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<NDEF> <WPS> = create NFC handover request" },
-	{ "nfc_get_handover_sel", wpa_cli_cmd_nfc_get_handover_sel, NULL,
+	{ "nfc_get_handover_sel", wpa_cli_cmd_nfc_get_handover_sel, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<NDEF> <WPS> = create NFC handover select" },
-	{ "nfc_report_handover", wpa_cli_cmd_nfc_report_handover, NULL,
+	{ "nfc_report_handover", wpa_cli_cmd_nfc_report_handover, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<role> <type> <hexdump of req> <hexdump of sel> = report completed "
 	"NFC handover" },
 #endif /* CONFIG_WPS_NFC */
-	{ "wps_reg", wpa_cli_cmd_wps_reg, wpa_cli_complete_bss,
+	{ "wps_reg", wpa_cli_cmd_wps_reg, handler_with_results_default_func, wpa_cli_complete_bss,
 	cli_cmd_flag_sensitive,
 	"<BSSID> <AP PIN> = start WPS Registrar to configure an AP" },
-	{ "wps_ap_pin", wpa_cli_cmd_wps_ap_pin, NULL,
+	{ "wps_ap_pin", wpa_cli_cmd_wps_ap_pin, handler_with_results_default_func, NULL,
 	cli_cmd_flag_sensitive,
 	"[params..] = enable/disable AP PIN" },
-	{ "wps_er_start", wpa_cli_cmd_wps_er_start, NULL,
+	{ "wps_er_start", wpa_cli_cmd_wps_er_start, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"[IP address] = start Wi-Fi Protected Setup External Registrar" },
-	{ "wps_er_stop", wpa_cli_cmd_wps_er_stop, NULL,
+	{ "wps_er_stop", wpa_cli_cmd_wps_er_stop, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= stop Wi-Fi Protected Setup External Registrar" },
-	{ "wps_er_pin", wpa_cli_cmd_wps_er_pin, NULL,
+	{ "wps_er_pin", wpa_cli_cmd_wps_er_pin, handler_with_results_default_func, NULL,
 	cli_cmd_flag_sensitive,
 	"<UUID> <PIN> = add an Enrollee PIN to External Registrar" },
-	{ "wps_er_pbc", wpa_cli_cmd_wps_er_pbc, NULL,
+	{ "wps_er_pbc", wpa_cli_cmd_wps_er_pbc, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<UUID> = accept an Enrollee PBC using External Registrar" },
-	{ "wps_er_learn", wpa_cli_cmd_wps_er_learn, NULL,
+	{ "wps_er_learn", wpa_cli_cmd_wps_er_learn, handler_with_results_default_func, NULL,
 	cli_cmd_flag_sensitive,
 	"<UUID> <PIN> = learn AP configuration" },
-	{ "wps_er_set_config", wpa_cli_cmd_wps_er_set_config, NULL,
+	{ "wps_er_set_config", wpa_cli_cmd_wps_er_set_config, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<UUID> <network id> = set AP configuration for enrolling" },
-	{ "wps_er_config", wpa_cli_cmd_wps_er_config, NULL,
+	{ "wps_er_config", wpa_cli_cmd_wps_er_config, handler_with_results_default_func, NULL,
 	cli_cmd_flag_sensitive,
 	"<UUID> <PIN> <SSID> <auth> <encr> <key> = configure AP" },
 #ifdef CONFIG_WPS_NFC
-	{ "wps_er_nfc_config_token", wpa_cli_cmd_wps_er_nfc_config_token, NULL,
+	{ "wps_er_nfc_config_token", wpa_cli_cmd_wps_er_nfc_config_token, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<WPS/NDEF> <UUID> = build NFC configuration token" },
 #endif /* CONFIG_WPS_NFC */
-	{ "ibss_rsn", wpa_cli_cmd_ibss_rsn, NULL,
+	{ "ibss_rsn", wpa_cli_cmd_ibss_rsn, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<addr> = request RSN authentication with <addr> in IBSS" },
 #ifdef CONFIG_AP
-	{ "sta", wpa_cli_cmd_sta, NULL,
+	{ "sta", wpa_cli_cmd_sta, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<addr> = get information about an associated station (AP)" },
-	{ "all_sta", wpa_cli_cmd_all_sta, NULL,
+	{ "all_sta", wpa_cli_cmd_all_sta, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= get information about all associated stations (AP)" },
-	{ "deauthenticate", wpa_cli_cmd_deauthenticate, NULL,
+	{ "deauthenticate", wpa_cli_cmd_deauthenticate, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<addr> = deauthenticate a station" },
-	{ "disassociate", wpa_cli_cmd_disassociate, NULL,
+	{ "disassociate", wpa_cli_cmd_disassociate, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<addr> = disassociate a station" },
-	{ "chan_switch", wpa_cli_cmd_chanswitch, NULL,
+	{ "chan_switch", wpa_cli_cmd_chanswitch, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<cs_count> <freq> [sec_channel_offset=] [center_freq1=]"
 	" [center_freq2=] [bandwidth=] [blocktx] [ht|vht]"
 	" = CSA parameters" },
 #endif /* CONFIG_AP */
-	{ "suspend", wpa_cli_cmd_suspend, NULL, cli_cmd_flag_none,
+	{ "suspend", wpa_cli_cmd_suspend, handler_with_results_default_func, NULL, cli_cmd_flag_none,
 	"= notification of suspend/hibernate" },
-	{ "resume", wpa_cli_cmd_resume, NULL, cli_cmd_flag_none,
+	{ "resume", wpa_cli_cmd_resume, handler_with_results_default_func, NULL, cli_cmd_flag_none,
 	"= notification of resume/thaw" },
 #ifdef CONFIG_TESTING_OPTIONS
-	{ "drop_sa", wpa_cli_cmd_drop_sa, NULL, cli_cmd_flag_none,
+	{ "drop_sa", wpa_cli_cmd_drop_sa, handler_with_results_default_func, NULL, cli_cmd_flag_none,
 	"= drop SA without deauth/disassoc (test command)" },
 #endif /* CONFIG_TESTING_OPTIONS */
-	{ "roam", wpa_cli_cmd_roam, wpa_cli_complete_bss,
+	{ "roam", wpa_cli_cmd_roam, handler_with_results_default_func, wpa_cli_complete_bss,
 	cli_cmd_flag_none,
 	"<addr> = roam to the specified BSS" },
 #ifdef CONFIG_MESH
-	{ "mesh_interface_add", wpa_cli_cmd_mesh_interface_add, NULL,
+	{ "mesh_interface_add", wpa_cli_cmd_mesh_interface_add, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"[ifname] = Create a new mesh interface" },
-	{ "mesh_group_add", wpa_cli_cmd_mesh_group_add, NULL,
+	{ "mesh_group_add", wpa_cli_cmd_mesh_group_add, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<network id> = join a mesh network (disable others)" },
-	{ "mesh_group_remove", wpa_cli_cmd_mesh_group_remove, NULL,
+	{ "mesh_group_remove", wpa_cli_cmd_mesh_group_remove, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<ifname> = Remove mesh group interface" },
-	{ "mesh_peer_remove", wpa_cli_cmd_mesh_peer_remove, NULL,
+	{ "mesh_peer_remove", wpa_cli_cmd_mesh_peer_remove, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<addr> = Remove a mesh peer" },
-	{ "mesh_peer_add", wpa_cli_cmd_mesh_peer_add, NULL,
+	{ "mesh_peer_add", wpa_cli_cmd_mesh_peer_add, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<addr> [duration=<seconds>] = Add a mesh peer" },
 #endif /* CONFIG_MESH */
 #ifdef CONFIG_P2P
-	{ "p2p_find", wpa_cli_cmd_p2p_find, wpa_cli_complete_p2p_find,
+	{ "p2p_find", wpa_cli_cmd_p2p_find, handler_with_results_default_func, wpa_cli_complete_p2p_find,
 	cli_cmd_flag_none,
 	"[timeout] [type=*] = find P2P Devices for up-to timeout seconds" },
-	{ "p2p_stop_find", wpa_cli_cmd_p2p_stop_find, NULL, cli_cmd_flag_none,
+	{ "p2p_stop_find", wpa_cli_cmd_p2p_stop_find, handler_with_results_default_func, NULL, cli_cmd_flag_none,
 	"= stop P2P Devices search" },
-	{ "p2p_asp_provision", wpa_cli_cmd_p2p_asp_provision, NULL,
+	{ "p2p_asp_provision", wpa_cli_cmd_p2p_asp_provision, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<addr> adv_id=<adv_id> conncap=<conncap> [info=<infodata>] = provision with a P2P ASP Device" },
-	{ "p2p_asp_provision_resp", wpa_cli_cmd_p2p_asp_provision_resp, NULL,
+	{ "p2p_asp_provision_resp", wpa_cli_cmd_p2p_asp_provision_resp, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<addr> adv_id=<adv_id> [role<conncap>] [info=<infodata>] = provision with a P2P ASP Device" },
-	{ "p2p_connect", wpa_cli_cmd_p2p_connect, wpa_cli_complete_p2p_connect,
+	{ "p2p_connect", wpa_cli_cmd_p2p_connect, handler_with_results_default_func, wpa_cli_complete_p2p_connect,
 	cli_cmd_flag_none,
 	"<addr> <\"pbc\"|PIN> [ht40] = connect to a P2P Device" },
-	{ "p2p_listen", wpa_cli_cmd_p2p_listen, NULL, cli_cmd_flag_none,
+	{ "p2p_listen", wpa_cli_cmd_p2p_listen, handler_with_results_default_func, NULL, cli_cmd_flag_none,
 	"[timeout] = listen for P2P Devices for up-to timeout seconds" },
-	{ "p2p_group_remove", wpa_cli_cmd_p2p_group_remove,
+	{ "p2p_group_remove", wpa_cli_cmd_p2p_group_remove,handler_with_results_default_func, 
 	wpa_cli_complete_p2p_group_remove, cli_cmd_flag_none,
 	"<ifname> = remove P2P group interface (terminate group if GO)" },
-	{ "p2p_group_add", wpa_cli_cmd_p2p_group_add, NULL, cli_cmd_flag_none,
+	{ "p2p_group_add", wpa_cli_cmd_p2p_group_add, handler_with_results_default_func, NULL, cli_cmd_flag_none,
 	"[ht40] = add a new P2P group (local end as GO)" },
-	{ "p2p_group_member", wpa_cli_cmd_p2p_group_member, NULL,
+	{ "p2p_group_member", wpa_cli_cmd_p2p_group_member, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<dev_addr> = Get peer interface address on local GO using peer Device Address" },
-	{ "p2p_prov_disc", wpa_cli_cmd_p2p_prov_disc,
+	{ "p2p_prov_disc", wpa_cli_cmd_p2p_prov_disc,handler_with_results_default_func, 
 	wpa_cli_complete_p2p_peer, cli_cmd_flag_none,
 	"<addr> <method> = request provisioning discovery" },
-	{ "p2p_get_passphrase", wpa_cli_cmd_p2p_get_passphrase, NULL,
+	{ "p2p_get_passphrase", wpa_cli_cmd_p2p_get_passphrase, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= get the passphrase for a group (GO only)" },
-	{ "p2p_serv_disc_req", wpa_cli_cmd_p2p_serv_disc_req,
+	{ "p2p_serv_disc_req", wpa_cli_cmd_p2p_serv_disc_req,handler_with_results_default_func, 
 	wpa_cli_complete_p2p_peer, cli_cmd_flag_none,
 	"<addr> <TLVs> = schedule service discovery request" },
-	{ "p2p_serv_disc_cancel_req", wpa_cli_cmd_p2p_serv_disc_cancel_req,
+	{ "p2p_serv_disc_cancel_req", wpa_cli_cmd_p2p_serv_disc_cancel_req,handler_with_results_default_func, 
 	NULL, cli_cmd_flag_none,
 	"<id> = cancel pending service discovery request" },
-	{ "p2p_serv_disc_resp", wpa_cli_cmd_p2p_serv_disc_resp, NULL,
+	{ "p2p_serv_disc_resp", wpa_cli_cmd_p2p_serv_disc_resp, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<freq> <addr> <dialog token> <TLVs> = service discovery response" },
-	{ "p2p_service_update", wpa_cli_cmd_p2p_service_update, NULL,
+	{ "p2p_service_update", wpa_cli_cmd_p2p_service_update, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= indicate change in local services" },
-	{ "p2p_serv_disc_external", wpa_cli_cmd_p2p_serv_disc_external, NULL,
+	{ "p2p_serv_disc_external", wpa_cli_cmd_p2p_serv_disc_external, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<external> = set external processing of service discovery" },
-	{ "p2p_service_flush", wpa_cli_cmd_p2p_service_flush, NULL,
+	{ "p2p_service_flush", wpa_cli_cmd_p2p_service_flush, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= remove all stored service entries" },
-	{ "p2p_service_add", wpa_cli_cmd_p2p_service_add, NULL,
+	{ "p2p_service_add", wpa_cli_cmd_p2p_service_add, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<bonjour|upnp|asp> <query|version> <response|service> = add a local "
 	"service" },
-	{ "p2p_service_rep", wpa_cli_cmd_p2p_service_rep, NULL,
+	{ "p2p_service_rep", wpa_cli_cmd_p2p_service_rep, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"asp <auto> <adv_id> <svc_state> <svc_string> [<svc_info>] = replace "
 	"local ASP service" },
-	{ "p2p_service_del", wpa_cli_cmd_p2p_service_del, NULL,
+	{ "p2p_service_del", wpa_cli_cmd_p2p_service_del, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<bonjour|upnp> <query|version> [|service] = remove a local "
 	"service" },
-	{ "p2p_reject", wpa_cli_cmd_p2p_reject, wpa_cli_complete_p2p_peer,
+	{ "p2p_reject", wpa_cli_cmd_p2p_reject, handler_with_results_default_func, wpa_cli_complete_p2p_peer,
 	cli_cmd_flag_none,
 	"<addr> = reject connection attempts from a specific peer" },
-	{ "p2p_invite", wpa_cli_cmd_p2p_invite, NULL,
+	{ "p2p_invite", wpa_cli_cmd_p2p_invite, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<cmd> [peer=addr] = invite peer" },
-	{ "p2p_peers", wpa_cli_cmd_p2p_peers, NULL, cli_cmd_flag_none,
+	{ "p2p_peers", wpa_cli_cmd_p2p_peers, handler_with_results_default_func, NULL, cli_cmd_flag_none,
 	"[discovered] = list known (optionally, only fully discovered) P2P "
 	"peers" },
-	{ "p2p_peer", wpa_cli_cmd_p2p_peer, wpa_cli_complete_p2p_peer,
+	{ "p2p_peer", wpa_cli_cmd_p2p_peer, handler_with_results_default_func, wpa_cli_complete_p2p_peer,
 	cli_cmd_flag_none,
 	"<address> = show information about known P2P peer" },
-	{ "p2p_set", wpa_cli_cmd_p2p_set, wpa_cli_complete_p2p_set,
+	{ "p2p_set", wpa_cli_cmd_p2p_set, handler_with_results_default_func, wpa_cli_complete_p2p_set,
 	cli_cmd_flag_none,
 	"<field> <value> = set a P2P parameter" },
-	{ "p2p_flush", wpa_cli_cmd_p2p_flush, NULL, cli_cmd_flag_none,
+	{ "p2p_flush", wpa_cli_cmd_p2p_flush, handler_with_results_default_func, NULL, cli_cmd_flag_none,
 	"= flush P2P state" },
-	{ "p2p_cancel", wpa_cli_cmd_p2p_cancel, NULL, cli_cmd_flag_none,
+	{ "p2p_cancel", wpa_cli_cmd_p2p_cancel, handler_with_results_default_func, NULL, cli_cmd_flag_none,
 	"= cancel P2P group formation" },
-	{ "p2p_unauthorize", wpa_cli_cmd_p2p_unauthorize,
+	{ "p2p_unauthorize", wpa_cli_cmd_p2p_unauthorize, handler_with_results_default_func, 
 	wpa_cli_complete_p2p_peer, cli_cmd_flag_none,
 	"<address> = unauthorize a peer" },
-	{ "p2p_presence_req", wpa_cli_cmd_p2p_presence_req, NULL,
+	{ "p2p_presence_req", wpa_cli_cmd_p2p_presence_req, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"[<duration> <interval>] [<duration> <interval>] = request GO "
 	"presence" },
-	{ "p2p_ext_listen", wpa_cli_cmd_p2p_ext_listen, NULL,
+	{ "p2p_ext_listen", wpa_cli_cmd_p2p_ext_listen, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"[<period> <interval>] = set extended listen timing" },
-	{ "p2p_remove_client", wpa_cli_cmd_p2p_remove_client,
+	{ "p2p_remove_client", wpa_cli_cmd_p2p_remove_client, handler_with_results_default_func, 
 	wpa_cli_complete_p2p_peer, cli_cmd_flag_none,
 	"<address|iface=address> = remove a peer from all groups" },
-	{ "vendor_elem_add", wpa_cli_cmd_vendor_elem_add, NULL,
+	{ "vendor_elem_add", wpa_cli_cmd_vendor_elem_add, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<frame id> <hexdump of elem(s)> = add vendor specific IEs to frame(s)\n"
 	VENDOR_ELEM_FRAME_ID },
-	{ "vendor_elem_get", wpa_cli_cmd_vendor_elem_get, NULL,
+	{ "vendor_elem_get", wpa_cli_cmd_vendor_elem_get, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<frame id> = get vendor specific IE(s) to frame(s)\n"
 	VENDOR_ELEM_FRAME_ID },
-	{ "vendor_elem_remove", wpa_cli_cmd_vendor_elem_remove, NULL,
+	{ "vendor_elem_remove", wpa_cli_cmd_vendor_elem_remove, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<frame id> <hexdump of elem(s)> = remove vendor specific IE(s) in frame(s)\n"
 	VENDOR_ELEM_FRAME_ID },
 #endif /* CONFIG_P2P */
 #ifdef CONFIG_WIFI_DISPLAY
-	{ "wfd_subelem_set", wpa_cli_cmd_wfd_subelem_set, NULL,
+	{ "wfd_subelem_set", wpa_cli_cmd_wfd_subelem_set, handler_with_results_default_func,  NULL,
 	cli_cmd_flag_none,
 	"<subelem> [contents] = set Wi-Fi Display subelement" },
-	{ "wfd_subelem_get", wpa_cli_cmd_wfd_subelem_get, NULL,
+	{ "wfd_subelem_get", wpa_cli_cmd_wfd_subelem_get, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<subelem> = get Wi-Fi Display subelement" },
 #endif /* CONFIG_WIFI_DISPLAY */
 #ifdef CONFIG_INTERWORKING
-	{ "fetch_anqp", wpa_cli_cmd_fetch_anqp, NULL, cli_cmd_flag_none,
+	{ "fetch_anqp", wpa_cli_cmd_fetch_anqp, handler_with_results_default_func, NULL, cli_cmd_flag_none,
 	"= fetch ANQP information for all APs" },
-	{ "stop_fetch_anqp", wpa_cli_cmd_stop_fetch_anqp, NULL,
+	{ "stop_fetch_anqp", wpa_cli_cmd_stop_fetch_anqp, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= stop fetch_anqp operation" },
-	{ "interworking_select", wpa_cli_cmd_interworking_select, NULL,
+	{ "interworking_select", wpa_cli_cmd_interworking_select, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"[auto] = perform Interworking network selection" },
-	{ "interworking_connect", wpa_cli_cmd_interworking_connect,
+	{ "interworking_connect", wpa_cli_cmd_interworking_connect, handler_with_results_default_func, 
 	wpa_cli_complete_bss, cli_cmd_flag_none,
 	"<BSSID> = connect using Interworking credentials" },
-	{ "interworking_add_network", wpa_cli_cmd_interworking_add_network,
+	{ "interworking_add_network", wpa_cli_cmd_interworking_add_network, handler_with_results_default_func, 
 	wpa_cli_complete_bss, cli_cmd_flag_none,
 	"<BSSID> = connect using Interworking credentials" },
-	{ "anqp_get", wpa_cli_cmd_anqp_get, wpa_cli_complete_bss,
+	{ "anqp_get", wpa_cli_cmd_anqp_get, handler_with_results_default_func, wpa_cli_complete_bss,
 	cli_cmd_flag_none,
 	"<addr> <info id>[,<info id>]... = request ANQP information" },
-	{ "gas_request", wpa_cli_cmd_gas_request, wpa_cli_complete_bss,
+	{ "gas_request", wpa_cli_cmd_gas_request, handler_with_results_default_func,  wpa_cli_complete_bss,
 	cli_cmd_flag_none,
 	"<addr> <AdvProtoID> [QueryReq] = GAS request" },
-	{ "gas_response_get", wpa_cli_cmd_gas_response_get,
+	{ "gas_response_get", wpa_cli_cmd_gas_response_get, handler_with_results_default_func, 
 	wpa_cli_complete_bss, cli_cmd_flag_none,
 	"<addr> <dialog token> [start,len] = Fetch last GAS response" },
 #endif /* CONFIG_INTERWORKING */
 #ifdef CONFIG_HS20
-	{ "hs20_anqp_get", wpa_cli_cmd_hs20_anqp_get, wpa_cli_complete_bss,
+	{ "hs20_anqp_get", wpa_cli_cmd_hs20_anqp_get, handler_with_results_default_func,  wpa_cli_complete_bss,
 	cli_cmd_flag_none,
 	"<addr> <subtype>[,<subtype>]... = request HS 2.0 ANQP information"
 	},
-	{ "nai_home_realm_list", wpa_cli_cmd_get_nai_home_realm_list,
+	{ "nai_home_realm_list", wpa_cli_cmd_get_nai_home_realm_list, handler_with_results_default_func, 
 	wpa_cli_complete_bss, cli_cmd_flag_none,
 	"<addr> <home realm> = get HS20 nai home realm list" },
-	{ "hs20_icon_request", wpa_cli_cmd_hs20_icon_request,
+	{ "hs20_icon_request", wpa_cli_cmd_hs20_icon_request, handler_with_results_default_func, 
 	wpa_cli_complete_bss, cli_cmd_flag_none,
 	"<addr> <icon name> = get Hotspot 2.0 OSU icon" },
-	{ "fetch_osu", wpa_cli_cmd_fetch_osu, NULL, cli_cmd_flag_none,
+	{ "fetch_osu", wpa_cli_cmd_fetch_osu, handler_with_results_default_func,  NULL, cli_cmd_flag_none,
 	"= fetch OSU provider information from all APs" },
-	{ "cancel_fetch_osu", wpa_cli_cmd_cancel_fetch_osu, NULL,
+	{ "cancel_fetch_osu", wpa_cli_cmd_cancel_fetch_osu, handler_with_results_default_func,  NULL,
 	cli_cmd_flag_none,
 	"= cancel fetch_osu command" },
 #endif /* CONFIG_HS20 */
-	{ "sta_autoconnect", wpa_cli_cmd_sta_autoconnect, NULL,
+	{ "sta_autoconnect", wpa_cli_cmd_sta_autoconnect, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<0/1> = disable/enable automatic reconnection" },
-	{ "tdls_discover", wpa_cli_cmd_tdls_discover, NULL,
+	{ "tdls_discover", wpa_cli_cmd_tdls_discover, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<addr> = request TDLS discovery with <addr>" },
-	{ "tdls_setup", wpa_cli_cmd_tdls_setup, NULL,
+	{ "tdls_setup", wpa_cli_cmd_tdls_setup, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<addr> = request TDLS setup with <addr>" },
-	{ "tdls_teardown", wpa_cli_cmd_tdls_teardown, NULL,
+	{ "tdls_teardown", wpa_cli_cmd_tdls_teardown, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<addr> = tear down TDLS with <addr>" },
-	{ "tdls_link_status", wpa_cli_cmd_tdls_link_status, NULL,
+	{ "tdls_link_status", wpa_cli_cmd_tdls_link_status, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<addr> = TDLS link status with <addr>" },
-	{ "wmm_ac_addts", wpa_cli_cmd_wmm_ac_addts, NULL,
+	{ "wmm_ac_addts", wpa_cli_cmd_wmm_ac_addts, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<uplink/downlink/bidi> <tsid=0..7> <up=0..7> [nominal_msdu_size=#] "
 	"[mean_data_rate=#] [min_phy_rate=#] [sba=#] [fixed_nominal_msdu] "
 	"= add WMM-AC traffic stream" },
-	{ "wmm_ac_delts", wpa_cli_cmd_wmm_ac_delts, NULL,
+	{ "wmm_ac_delts", wpa_cli_cmd_wmm_ac_delts, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<tsid> = delete WMM-AC traffic stream" },
-	{ "wmm_ac_status", wpa_cli_cmd_wmm_ac_status, NULL,
+	{ "wmm_ac_status", wpa_cli_cmd_wmm_ac_status,handler_with_results_default_func,   NULL,
 	cli_cmd_flag_none,
 	"= show status for Wireless Multi-Media Admission-Control" },
-	{ "tdls_chan_switch", wpa_cli_cmd_tdls_chan_switch, NULL,
+	{ "tdls_chan_switch", wpa_cli_cmd_tdls_chan_switch, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<addr> <oper class> <freq> [sec_channel_offset=] [center_freq1=] "
 	"[center_freq2=] [bandwidth=] [ht|vht] = enable channel switching "
 	"with TDLS peer" },
-	{ "tdls_cancel_chan_switch", wpa_cli_cmd_tdls_cancel_chan_switch, NULL,
+	{ "tdls_cancel_chan_switch", wpa_cli_cmd_tdls_cancel_chan_switch, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<addr> = disable channel switching with TDLS peer <addr>" },
-	{ "signal_poll", wpa_cli_cmd_signal_poll, NULL,
+	{ "signal_poll", wpa_cli_cmd_signal_poll, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= get signal parameters" },
-	{ "signal_monitor", wpa_cli_cmd_signal_monitor, NULL,
+	{ "signal_monitor", wpa_cli_cmd_signal_monitor, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= set signal monitor parameters" },
-	{ "pktcnt_poll", wpa_cli_cmd_pktcnt_poll, NULL,
+	{ "pktcnt_poll", wpa_cli_cmd_pktcnt_poll, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= get TX/RX packet counters" },
-	{ "reauthenticate", wpa_cli_cmd_reauthenticate, NULL,
+	{ "reauthenticate", wpa_cli_cmd_reauthenticate, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= trigger IEEE 802.1X/EAPOL reauthentication" },
 #ifdef CONFIG_AUTOSCAN
-	{ "autoscan", wpa_cli_cmd_autoscan, NULL, cli_cmd_flag_none,
+	{ "autoscan", wpa_cli_cmd_autoscan, handler_with_results_default_func, NULL, cli_cmd_flag_none,
 	"[params] = Set or unset (if none) autoscan parameters" },
 #endif /* CONFIG_AUTOSCAN */
 #ifdef CONFIG_WNM
-	{ "wnm_sleep", wpa_cli_cmd_wnm_sleep, NULL, cli_cmd_flag_none,
+	{ "wnm_sleep", wpa_cli_cmd_wnm_sleep, handler_with_results_default_func, NULL, cli_cmd_flag_none,
 	"<enter/exit> [interval=#] = enter/exit WNM-Sleep mode" },
-	{ "wnm_bss_query", wpa_cli_cmd_wnm_bss_query, NULL, cli_cmd_flag_none,
+	{ "wnm_bss_query", wpa_cli_cmd_wnm_bss_query, handler_with_results_default_func, NULL, cli_cmd_flag_none,
 	"<query reason> [list] = Send BSS Transition Management Query" },
 #endif /* CONFIG_WNM */
-	{ "raw", wpa_cli_cmd_raw, NULL, cli_cmd_flag_sensitive,
+	{ "raw", wpa_cli_cmd_raw, handler_with_results_default_func, NULL, cli_cmd_flag_sensitive,
 	"<params..> = Sent unprocessed command" },
-	{ "flush", wpa_cli_cmd_flush, NULL, cli_cmd_flag_none,
+	{ "flush", wpa_cli_cmd_flush, handler_with_results_default_func, NULL, cli_cmd_flag_none,
 	"= flush wpa_supplicant state" },
 #ifdef ANDROID
-	{ "driver", wpa_cli_cmd_driver, NULL, cli_cmd_flag_none,
+	{ "driver", wpa_cli_cmd_driver, handler_with_results_default_func, NULL, cli_cmd_flag_none,
 	"<command> = driver private commands" },
 #endif /* ANDROID */
-	{ "radio_work", wpa_cli_cmd_radio_work, NULL, cli_cmd_flag_none,
+	{ "radio_work", wpa_cli_cmd_radio_work,handler_with_results_default_func,  NULL, cli_cmd_flag_none,
 	"= radio_work <show/add/done>" },
-	{ "vendor", wpa_cli_cmd_vendor, NULL, cli_cmd_flag_none,
+	{ "vendor", wpa_cli_cmd_vendor,handler_with_results_default_func,  NULL, cli_cmd_flag_none,
 	"<vendor id> <command id> [<hex formatted command argument>] = Send vendor command"
 	},
 	{ "neighbor_rep_request",
-	wpa_cli_cmd_neighbor_rep_request, NULL, cli_cmd_flag_none,
+	wpa_cli_cmd_neighbor_rep_request, handler_with_results_default_func, NULL, cli_cmd_flag_none,
 	"[ssid=<SSID>] [lci] [civic] = Trigger request to AP for neighboring AP report (with optional given SSID in hex or enclosed in double quotes, default: current SSID; with optional LCI and location civic request)"
 	},
-	{ "erp_flush", wpa_cli_cmd_erp_flush, NULL, cli_cmd_flag_none,
+	{ "erp_flush", wpa_cli_cmd_erp_flush,handler_with_results_default_func,  NULL, cli_cmd_flag_none,
 	"= flush ERP keys" },
 	{ "mac_rand_scan",
-	wpa_cli_cmd_mac_rand_scan, NULL, cli_cmd_flag_none,
+	wpa_cli_cmd_mac_rand_scan, handler_with_results_default_func, NULL, cli_cmd_flag_none,
 	"<scan|sched|pno|all> enable=<0/1> [addr=mac-address "
 	"mask=mac-address-mask] = scan MAC randomization"
 	},
-	{ "get_pref_freq_list", wpa_cli_cmd_get_pref_freq_list, NULL,
+	{ "get_pref_freq_list", wpa_cli_cmd_get_pref_freq_list,handler_with_results_default_func,  NULL,
 	cli_cmd_flag_none,
 	"<interface type> = retrieve preferred freq list for the specified interface type" },
-	{ "p2p_lo_start", wpa_cli_cmd_p2p_lo_start, NULL,
+	{ "p2p_lo_start", wpa_cli_cmd_p2p_lo_start, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"<freq> <period> <interval> <count> = start P2P listen offload" },
-	{ "p2p_lo_stop", wpa_cli_cmd_p2p_lo_stop, NULL,
+	{ "p2p_lo_stop", wpa_cli_cmd_p2p_lo_stop, handler_with_results_default_func, NULL,
 	cli_cmd_flag_none,
 	"= stop P2P listen offload" },
-	{ NULL, NULL, NULL, cli_cmd_flag_none, NULL }
+	{ NULL, NULL, handler_with_results_default_func, NULL, cli_cmd_flag_none, NULL }
 };
 
 
@@ -3521,6 +3713,63 @@ static int wpa_request(struct wpa_ctrl *ctrl, int argc, char *argv[])
 	}
 	else {
 		ret = match->handler(ctrl, argc - 1, &argv[1]);
+	}
+
+	return ret;
+}
+
+static int wpa_request_with_result_buf(struct wpa_ctrl *ctrl, int argc, char *argv[], char* buf, int buf_len)
+{
+	const struct wpa_cli_cmd *cmd, *match = NULL;
+	int count;
+	int ret = 0;
+
+	if (argc > 1 && os_strncasecmp(argv[0], "IFNAME=", 7) == 0) {
+		ifname_prefix = argv[0] + 7;
+		argv = &argv[1];
+		argc--;
+	}
+	else
+		ifname_prefix = NULL;
+
+	if (argc == 0)
+		return -1;
+
+	count = 0;
+	cmd = wpa_cli_commands;
+	while (cmd->cmd) {
+		if (os_strncasecmp(cmd->cmd, argv[0], os_strlen(argv[0])) == 0)
+		{
+			match = cmd;
+			if (os_strcasecmp(cmd->cmd, argv[0]) == 0) {
+				/* we have an exact match */
+				count = 1;
+				break;
+			}
+			count++;
+		}
+		cmd++;
+	}
+
+	if (count > 1) {
+		printf("Ambiguous command '%s'; possible commands:", argv[0]);
+		cmd = wpa_cli_commands;
+		while (cmd->cmd) {
+			if (os_strncasecmp(cmd->cmd, argv[0],
+				os_strlen(argv[0])) == 0) {
+				printf(" %s", cmd->cmd);
+			}
+			cmd++;
+		}
+		printf("\n");
+		ret = 1;
+	}
+	else if (count == 0) {
+		printf("Unknown command '%s'\n", argv[0]);
+		ret = 1;
+	}
+	else {
+		ret = match->handler_with_results(ctrl, argc - 1, &argv[1], buf, buf_len);
 	}
 
 	return ret;
@@ -4194,17 +4443,62 @@ static char * wpa_cli_get_default_ifname(void)
 	return ifname;
 }
 
+
+
+
+
+const int kMaxArgs = 16;
+
+static int parse_line (char *line, char *argv[])
+{
+    int nargs = 0;
+
+    while (nargs < kMaxArgs)
+    {
+
+        /* skip any white space */
+        while ((*line == ' ') || (*line == '\t'))
+        {
+            ++line;
+        }
+
+        if (*line == '\0')      /* end of line, no more args    */
+        {
+            argv[nargs] = NULL;
+            return (nargs);
+        }
+
+        argv[nargs++] = line;   /* begin of argument string */
+
+        /* find end of string */
+        while (*line && (*line != ' ') && (*line != '\t'))
+        {
+            ++line;
+        }
+
+        if (*line == '\0')      /* end of line, no more args    */
+        {
+            argv[nargs] = NULL;
+            return (nargs);
+        }
+
+        *line++ = '\0';     /* terminate current arg     */
+    }
+
+    return (nargs);
+}
+
 int init_wpa_cli()
 {
-	if (eloop_init())
-		return -1;
+//	if (eloop_init())
+//		return -1;
 
 	if (ctrl_ifname == NULL)
 		ctrl_ifname = wpa_cli_get_default_ifname();
 
-	if (wpa_cli_open_connection(ctrl_ifname, 0) < 0) {
-		fprintf(stderr, "Failed to connect to non-global "
-			"ctrl_ifname: %s  error: %s\n",
+	if (wpa_cli_open_connection(ctrl_ifname, 0) < 0) 
+	{
+		fprintf(stderr, "Failed to connect to non-global ctrl_ifname: %s  error: %s\n",
 			ctrl_ifname ? ctrl_ifname : "(nil)",
 			strerror(errno));
 		return -1;
@@ -4215,7 +4509,12 @@ int init_wpa_cli()
 
 int wpa_cli_execute(const char* cmd, char* buf, int buf_len)
 {
-	return 0;
+	int argc;
+	char tmp_cmd[1024] = {0};
+	char *argv[kMaxArgs];
+	strcpy(tmp_cmd, cmd);
+	argc = parse_line(tmp_cmd, argv);
+	return wpa_request_with_result_buf(ctrl_conn, argc, argv, buf, buf_len);
 }
 
 int deinit_wpa_cli()
