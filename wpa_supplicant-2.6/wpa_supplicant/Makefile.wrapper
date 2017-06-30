@@ -1,4 +1,4 @@
-.PHONY: clean all
+.PHONY: clean all install
 
 cc=gcc
 
@@ -15,7 +15,16 @@ ${LIB}:libwpa_cli_wrapper.c
 	
 ${BIN}:libwpa_cli_wrapper_test.c
 	${cc} libwpa_cli_wrapper_test.c -o ${BIN} -lwpa_cli_wrapper -L.
-
+	
+install:
+	mkdir -p ../release
+	rm ../release/* -rf
+	cp libwpa_cli_wrapper.h ../release/
+	cp libwpa_cli_wrapper.c ../release/
+	cp libwpa_cli_wrapper.a ../release/
+	cp libwpa_cli_wrapper_test.c ../release/
+	cp libwpa_cli_wrapper_test ../release/
+	
 clean:
 	rm libwpa_cli_wrapper.o -f
 	rm ${LIB} -f
