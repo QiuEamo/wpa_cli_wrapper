@@ -4488,10 +4488,18 @@ static int parse_line (char *line, char *argv[])
     return (nargs);
 }
 
+static int g_wpa__cli_initialized = 0;
+
 int init_wpa_cli()
 {
 //	if (eloop_init())
 //		return -1;
+	
+	if (g_wpa__cli_initialized == 1)
+	{
+		fprintf(stderr, "wpa_cli already initialized!\n");
+		return -1;
+	}
 
 	if (ctrl_ifname == NULL)
 		ctrl_ifname = wpa_cli_get_default_ifname();
@@ -4501,14 +4509,22 @@ int init_wpa_cli()
 		fprintf(stderr, "Failed to connect to non-global ctrl_ifname: %s  error: %s\n",
 			ctrl_ifname ? ctrl_ifname : "(nil)",
 			strerror(errno));
-		return -1;
+		return -2;
 	}
+	
+	g_wpa__cli_initialized = 1;
 
 	return 0;
 }
 
 int wpa_cli_execute(const char* cmd, char* buf, int buf_len)
 {
+	if (g_wpa__cli_initialized == 0)
+	{
+		fprintf(stderr, "wpa_cli not initialized!\n");
+		return -1;
+	}
+	
 	int argc;
 	char tmp_cmd[1024] = {0};
 	char *argv[kMaxArgs];
@@ -4519,7 +4535,12 @@ int wpa_cli_execute(const char* cmd, char* buf, int buf_len)
 
 int deinit_wpa_cli()
 {
-	os_free(ctrl_ifname);
-	wpa_cli_cleanup();
+	if (g_wpa__cli_initialized == 1)
+	{
+		os_free(ctrl_ifname);
+		wpa_cli_cleanup();
+		g_wpa__cli_initialized = 0;
+		return 0;
+	}
 	return 0;
 }
